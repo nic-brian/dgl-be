@@ -1,0 +1,22 @@
+{
+  "name": "dgl-be",
+  "author": "Brian Koehler",
+  "description": "DGL Backend",
+  "license": "MIT",
+  "packageManager": "yarn@3.6.0",
+  "engines": {
+    "yarn": "^3.6.0"
+  },
+  "main": "lib/index.js",
+  "scripts": {
+    "start": "functions-framework --target=hello",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "gcp-build": "tsc"
+  },
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.1.3"
+  }
+}

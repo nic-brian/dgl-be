@@ -9,12 +9,13 @@
   },
   "main": "lib/index.js",
   "scripts": {
-    "start": "functions-framework --target=hello",
+    "start": "functions-framework --target=dgl_be --port=8081",
     "test": "echo \"Error: no test specified\" && exit 1",
     "gcp-build": "tsc"
   },
   "dependencies": {
-    "@google-cloud/functions-framework": "^3.2.0"
+    "@google-cloud/functions-framework": "^3.2.0",
+    "promise-mysql": "^5.2.0"
   },
   "devDependencies": {
     "typescript": "^5.1.3"

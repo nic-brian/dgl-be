@@ -1,10 +1,15 @@
 #! /bin/bash
 
-gcloud functions deploy tstest5 \
+gcloud functions deploy dgl-be \
   --gen2 \
   --runtime=nodejs18 \
   --region=us-west1 \
   --source=. \
-  --entry-point=hello \
+  --entry-point=dgl_be \
   --trigger-http \
-  --allow-unauthenticated
+  --allow-unauthenticated \
+  --update-env-vars \
+DB_HOST=$DB_HOST,\
+DB_USER=$DB_USER,\
+DB_PASS=$DB_PASS,\
+DB_NAME=$DB_NAME

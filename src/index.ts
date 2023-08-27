@@ -79,112 +79,112 @@ let pool: any;
 
 const db = new Firestore({
   //  projectId: 'cps-146'
-    projectId: process.env.GOOGLE_CLOUD_PROJECT
-  });
+  projectId: process.env.GOOGLE_CLOUD_PROJECT
+});
   
-  const collection = db.collection('requests');
-  const collectionMatrix = db.collection('requestsmatrix');
-  const accounts = db.collection('accounts');
+const collection = db.collection('requests');
+const collectionMatrix = db.collection('requestsmatrix');
+const accounts = db.collection('accounts');
   
-  async function createOrUpadateMySQLAccount( account: string, password: string ) {
-    pool = pool || (await createPoolAndEnsureSchema());
-    const db_name = account + '_db0001';
-    const priv_level = db_name + '.*';
-    const create_db = 'create database if not exists ' + db_name;
-    const grant_all = 'grant all on ' + priv_level + ' to ' + account;
-    await pool.query( 'create user if not exists ? identified by ?', [account,password]);
-    await pool.query( 'alter user if exists ? identified by ?', [account,password]);
-    await pool.query( create_db );
-    await pool.query( 'grant select on employees.* to ?', [account]);
-    await pool.query( 'grant select on menagerie.* to ?', [account]);
-    await pool.query( 'grant select on sakila.* to ?', [account]);
-    await pool.query( 'grant select on world_x.* to ?', [account]);
-    await pool.query( grant_all );
+async function createOrUpadateMariaDBAccount( account: string, password: string ) {
+  pool = pool || (await createPoolAndEnsureSchema());
+  const db_name = account + '_db0001';
+  const priv_level = db_name + '.*';
+  const create_db = 'create database if not exists ' + db_name;
+  const grant_all = 'grant all on ' + priv_level + ' to ' + account;
+  await pool.query( 'create user if not exists ? identified by ?', [account,password]);
+  await pool.query( 'alter user if exists ? identified by ?', [account,password]);
+  await pool.query( create_db );
+  await pool.query( 'grant select on employees.* to ?', [account]);
+  await pool.query( 'grant select on menagerie.* to ?', [account]);
+  await pool.query( 'grant select on sakila.* to ?', [account]);
+  await pool.query( 'grant select on world_x.* to ?', [account]);
+  await pool.query( grant_all );
+}
+  
+async function getAccountFromEmail( email: string ) {
+  const snapshot = await accounts
+    .where( 'email', '==', email )
+    .get();
+  return snapshot;
+}
+  
+async function getEmailFromToken(token: string, col: CollectionReference<DocumentData> ) {
+  let email = '';
+  const now = Timestamp.now();
+  const oneHourAgo = new Timestamp( now.seconds - 3600, now.nanoseconds );
+  const snapshot = await col
+    .where( 'token', '==', token )
+    .where( 'createdAt', '>', oneHourAgo )
+    .limit( 1 )
+    .get();
+  if ( !snapshot.empty) {
+    snapshot.forEach(doc => {
+      const result = doc.data();
+      email = result.email;
+    });
   }
+  return email;
+}
   
-  async function getAccountFromEmail( email: string ) {
-    const snapshot = await accounts
-      .where( 'email', '==', email )
-      .get();
-    return snapshot;
-  }
-  
-  async function getEmailFromToken(token: string, col: CollectionReference<DocumentData> ) {
-    let email = '';
-    const now = Timestamp.now();
-    const oneHourAgo = new Timestamp( now.seconds - 3600, now.nanoseconds );
-    const snapshot = await col
-      .where( 'token', '==', token )
-      .where( 'createdAt', '>', oneHourAgo )
-      .limit( 1 )
-      .get();
-    if ( !snapshot.empty) {
-      snapshot.forEach(doc => {
-        const result = doc.data();
-        email = result.email;
-      });
-    }
-    return email;
-  }
-  
-  const CreateAccountRequest = async ( req: express.Request,
-                                       res: express.Response,
-                                       col: CollectionReference<DocumentData>,
-                                       label: string ) => {
-    if ( req.body.token && req.body.email ) {
-      if ( req.body.email.match(/^.+@nic\.bc\.ca|.+@northislandcollege\.ca|.+@koehler.ca$/) ) {
-        const response = await axios.post(
-          'https://www.google.com/recaptcha/api/siteverify',
-          querystring.stringify({
-            secret: process.env.RECAPTCHA_SECRET,
-            response: req.body.token
-          })
-        );
-        if ( response.data.success && response.data.score > 0.6 ) {
-          const buf = crypto.randomBytes(16);
-          const newRequest = {
-            email: req.body.email,
-            token: buf.toString( 'hex'),
-            createdAt: Timestamp.now()
-          };
-          const docRef = await col.add( newRequest );
-          let transporter = nodemailer.createTransport({
-            host: "email-smtp.ca-central-1.amazonaws.com",
-            port: 587,
-            secure: false,
-            requireTLS: true,
-            auth: {
-              user: process.env.SMTP_USER, // AWS SES user
-              pass: process.env.SMTP_PASS // AWS SES password
-            }
-          });
-          let info = await transporter.sendMail({
-            from: 'no-reply@nic.koehler.ca', // PUT YOUR DOMAIN HERE
-            to: req.body.email, // list of receivers
-            subject: `Configure Your ${label} Account`, // Subject line
-            text: `Follow this link to configure your ${label} account: ` +
-              process.env.FRONTEND_URL +
-              `/verify-${label}-account/` +
-              newRequest.token
-          });
-          console.log( 'Initiated request for: ' + req.body.email );
-  
-        } else {
-          console.log( 'recaptcha fail' );
-          console.log( response.data );
-        }
-  
+const CreateAccountRequest = async ( req: express.Request,
+                                     res: express.Response,
+                                     col: CollectionReference<DocumentData>,
+                                     label: string ) => {
+  if ( req.body.token && req.body.email ) {
+    if ( req.body.email.match(/^.+@nic\.bc\.ca|.+@northislandcollege\.ca|.+@koehler.ca$/) ) {
+      const response = await axios.post(
+        'https://www.google.com/recaptcha/api/siteverify',
+        querystring.stringify({
+          secret: process.env.RECAPTCHA_SECRET,
+          response: req.body.token
+        })
+      );
+      if ( response.data.success && response.data.score > 0.6 ) {
+        const buf = crypto.randomBytes(16);
+        const newRequest = {
+          email: req.body.email,
+          token: buf.toString( 'hex'),
+          createdAt: Timestamp.now()
+        };
+        const docRef = await col.add( newRequest );
+        let transporter = nodemailer.createTransport({
+          host: process.env.SMTP_HOST,
+          port: 587,
+          secure: false,
+          requireTLS: true,
+          auth: {
+            user: process.env.SMTP_USER, 
+            pass: process.env.SMTP_PASS 
+          }
+        });
+        let info = await transporter.sendMail({
+          from: 'brian.koehler@nic.bc.ca', // PUT YOUR DOMAIN HERE
+          to: req.body.email, // list of receivers
+          subject: `Configure Your ${label} Account`, // Subject line
+          text: `Follow this link to configure your ${label} account: ` +
+            process.env.FRONTEND_URL +
+            `/verify-${label}-account/` +
+            newRequest.token
+        });
+        console.log( 'Initiated request for: ' + req.body.email );
+ 
       } else {
-        console.log( 'invalid email' );
-        console.log( req.body.email );
+        console.log( 'recaptcha fail' );
+        console.log( response.data );
       }
+  
     } else {
-      console.log( 'missing email or token');
+      console.log( 'invalid email' );
+      console.log( req.body.email );
     }
-    res.json( {
-      message: 'Success'
-    } );
+  } else {
+    console.log( 'missing email or token');
   }
+  res.json( {
+    message: 'Success'
+  } );
+}
   
 export const dgl_be: HttpFunction = async (req, res) => {
   res.set('Access-Control-Allow-Origin', '*');
@@ -202,17 +202,17 @@ export const dgl_be: HttpFunction = async (req, res) => {
         message: accountSnapshot.empty ? 'create' : 'update',
         email
       } );
-      console.log( 'Fetched valid MySQL request for: ' + email );
+      console.log( 'Fetched valid MariaDB request for: ' + email );
       console.log( 'with token: ' + token );
     } else {
       res.json( {
-        message: "Invalid or expired MySQL link"
+        message: "Invalid or expired MariaDB link"
       } );
-      console.log( 'Invalid or expired MySQL token: ' + token );
+      console.log( 'Invalid or expired MariaDB token: ' + token );
     }
 
   } else if ( req.method === 'POST' && req.path === '/accounts') {
-    let message = 'MySQL: Unknown error.'
+    let message = 'MariaDB: Unknown error.'
     if ( req.body.token && req.body.password ) {
       const email = await getEmailFromToken( req.body.token, collection );
       if ( email ) {
@@ -223,8 +223,8 @@ export const dgl_be: HttpFunction = async (req, res) => {
             const result = doc.data();
             lastAccount = result.account;
           });
-          await createOrUpadateMySQLAccount( lastAccount, req.body.password );
-          message = `Updated MySQL account: ${lastAccount} (for ${email})`;
+          await createOrUpadateMariaDBAccount( lastAccount, req.body.password );
+          message = `Updated MariaDB account: ${lastAccount} (for ${email})`;
         } else {
           let lastAccount = ''
           const accountSnapshot = await accounts
@@ -246,8 +246,8 @@ export const dgl_be: HttpFunction = async (req, res) => {
             email,
             account
           } );
-          await createOrUpadateMySQLAccount( account, req.body.password );
-          message = `Created MySQL account: ${account} (for ${email})`;
+          await createOrUpadateMariaDBAccount( account, req.body.password );
+          message = `Created MariaDB account: ${account} (for ${email})`;
         }
       } else {
         message = 'Invalid or expired link.'
@@ -259,7 +259,7 @@ export const dgl_be: HttpFunction = async (req, res) => {
     res.json( { message } );
 
   } else if ( req.method === 'POST' && req.path === '/requests') {
-    CreateAccountRequest( req, res, collection, 'MySQL' );
+    CreateAccountRequest( req, res, collection, 'MariaDB' );
 
   } else if ( req.method === 'POST' && req.path === '/requests-matrix') {
     CreateAccountRequest( req, res, collectionMatrix, 'Matrix' );

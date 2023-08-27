@@ -7,6 +7,25 @@ import axios from 'axios';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 
+const synapse_registration_url: string = process.env.SYNAPSE_REGISTRATION_URL || '';
+const synapse_registration_shared_secret: string = process.env.SYNAPSE_REGISTRATION_SHARED_SECRET || '';
+
+function generate_mac( shared_secret: string,
+                       nonce: string,
+                       user: string,
+                       password: string,
+                       admin=false ) {
+  const hmac = crypto.createHmac('sha1', shared_secret);
+  hmac.update( nonce );
+  hmac.update( '\x00' );
+  hmac.update( user );
+  hmac.update( '\x00' );
+  hmac.update( password );
+  hmac.update( '\x00' );
+  hmac.update( admin ? 'admin' : 'notadmin' );
+  return hmac.digest('hex');
+}
+
 const createTcpPool = async (config: any) => {
   // Establish a connection to the database
   return await mysql.createPool({
@@ -159,7 +178,7 @@ const CreateAccountRequest = async ( req: express.Request,
           }
         });
         let info = await transporter.sendMail({
-          from: 'brian.koehler@nic.bc.ca', // PUT YOUR DOMAIN HERE
+          from: 'nic@koehler.ca', // PUT YOUR DOMAIN HERE
           to: req.body.email, // list of receivers
           subject: `Configure Your ${label} Account`, // Subject line
           text: `Follow this link to configure your ${label} account: ` +
@@ -210,6 +229,52 @@ export const dgl_be: HttpFunction = async (req, res) => {
       } );
       console.log( 'Invalid or expired MariaDB token: ' + token );
     }
+
+  } else if ( req.method === 'GET' && req.path.startsWith( '/requests-matrix/' ) ) {
+    const token = req.path.replace ('/requests-matrix/', '' );
+    const email = await getEmailFromToken( token, collectionMatrix );
+    if ( email ) {
+      res.json( {
+        message: 'create',
+        email
+      } );
+      console.log( 'Fetched valid Matrix request for: ' + email );
+      console.log( 'with token: ' + token );
+    } else {
+      res.json( {
+        message: "Invalid or expired Matrix link"
+      } );
+      console.log( 'Invalid or expired Matrix token: ' + token );
+    }
+
+  } else if ( req.method === 'POST' && req.path === '/accounts-matrix') {
+    let message = 'Matrix: Unknown error.'
+    if ( req.body.token && req.body.password ) {
+      const email = await getEmailFromToken( req.body.token, collectionMatrix );
+      if ( email ) {
+        const [account,discard] = email.split( '@', 2 );
+        const response = await axios.get( synapse_registration_url );
+        const mac = generate_mac(
+          synapse_registration_shared_secret,
+          response.data.nonce,
+          account,
+          req.body.password
+        );
+        const response2 = await axios.post( synapse_registration_url, {
+          'nonce': response.data.nonce,
+          'username': account,
+          'password': req.body.password,
+          'mac': mac
+        });
+        message = `Created Matrix account: ${account} (for ${email})`;
+      } else {
+        message = 'Matrix: Invalid or expired link.'
+      }
+    } else {
+      message = 'Matrix: Missing token or password.';
+    }
+    console.log( message )
+    res.json( { message } );
 
   } else if ( req.method === 'POST' && req.path === '/accounts') {
     let message = 'MariaDB: Unknown error.'

@@ -1,6 +1,11 @@
 import { HttpFunction } from '@google-cloud/functions-framework';
+import { Firestore, Timestamp, CollectionReference, DocumentData } from '@google-cloud/firestore';
 import mysql from 'promise-mysql';
-import { readFileSync } from 'fs';
+import * as express from 'express';
+import querystring from 'querystring';
+import axios from 'axios';
+import crypto from 'crypto';
+import nodemailer from 'nodemailer';
 
 const createTcpPool = async (config: any) => {
   // Establish a connection to the database
@@ -72,13 +77,199 @@ const createPoolAndEnsureSchema = async () =>
 // testing different configurations.
 let pool: any;
 
-export const dgl_be: HttpFunction = async (req, res) => {
-  pool = pool || (await createPoolAndEnsureSchema());
-  let results: any;
-  results = await pool.query('select * from pet');
-  let body = '<table><tr><th>Pet Names</th></tr>';
-  for ( const row of results ) {
-    body += `<tr><td>${row['name']}</td></tr>`;
+const db = new Firestore({
+  //  projectId: 'cps-146'
+    projectId: process.env.GOOGLE_CLOUD_PROJECT
+  });
+  
+  const collection = db.collection('requests');
+  const collectionMatrix = db.collection('requestsmatrix');
+  const accounts = db.collection('accounts');
+  
+  async function createOrUpadateMySQLAccount( account: string, password: string ) {
+    pool = pool || (await createPoolAndEnsureSchema());
+    const db_name = account + '_db0001';
+    const priv_level = db_name + '.*';
+    const create_db = 'create database if not exists ' + db_name;
+    const grant_all = 'grant all on ' + priv_level + ' to ' + account;
+    await pool.query( 'create user if not exists ? identified by ?', [account,password]);
+    await pool.query( 'alter user if exists ? identified by ?', [account,password]);
+    await pool.query( create_db );
+    await pool.query( 'grant select on employees.* to ?', [account]);
+    await pool.query( 'grant select on menagerie.* to ?', [account]);
+    await pool.query( 'grant select on sakila.* to ?', [account]);
+    await pool.query( 'grant select on world_x.* to ?', [account]);
+    await pool.query( grant_all );
   }
-  res.send( body );
+  
+  async function getAccountFromEmail( email: string ) {
+    const snapshot = await accounts
+      .where( 'email', '==', email )
+      .get();
+    return snapshot;
+  }
+  
+  async function getEmailFromToken(token: string, col: CollectionReference<DocumentData> ) {
+    let email = '';
+    const now = Timestamp.now();
+    const oneHourAgo = new Timestamp( now.seconds - 3600, now.nanoseconds );
+    const snapshot = await col
+      .where( 'token', '==', token )
+      .where( 'createdAt', '>', oneHourAgo )
+      .limit( 1 )
+      .get();
+    if ( !snapshot.empty) {
+      snapshot.forEach(doc => {
+        const result = doc.data();
+        email = result.email;
+      });
+    }
+    return email;
+  }
+  
+  const CreateAccountRequest = async ( req: express.Request,
+                                       res: express.Response,
+                                       col: CollectionReference<DocumentData>,
+                                       label: string ) => {
+    if ( req.body.token && req.body.email ) {
+      if ( req.body.email.match(/^.+@nic\.bc\.ca|.+@northislandcollege\.ca|.+@koehler.ca$/) ) {
+        const response = await axios.post(
+          'https://www.google.com/recaptcha/api/siteverify',
+          querystring.stringify({
+            secret: process.env.RECAPTCHA_SECRET,
+            response: req.body.token
+          })
+        );
+        if ( response.data.success && response.data.score > 0.6 ) {
+          const buf = crypto.randomBytes(16);
+          const newRequest = {
+            email: req.body.email,
+            token: buf.toString( 'hex'),
+            createdAt: Timestamp.now()
+          };
+          const docRef = await col.add( newRequest );
+          let transporter = nodemailer.createTransport({
+            host: "email-smtp.ca-central-1.amazonaws.com",
+            port: 587,
+            secure: false,
+            requireTLS: true,
+            auth: {
+              user: process.env.SMTP_USER, // AWS SES user
+              pass: process.env.SMTP_PASS // AWS SES password
+            }
+          });
+          let info = await transporter.sendMail({
+            from: 'no-reply@nic.koehler.ca', // PUT YOUR DOMAIN HERE
+            to: req.body.email, // list of receivers
+            subject: `Configure Your ${label} Account`, // Subject line
+            text: `Follow this link to configure your ${label} account: ` +
+              process.env.FRONTEND_URL +
+              `/verify-${label}-account/` +
+              newRequest.token
+          });
+          console.log( 'Initiated request for: ' + req.body.email );
+  
+        } else {
+          console.log( 'recaptcha fail' );
+          console.log( response.data );
+        }
+  
+      } else {
+        console.log( 'invalid email' );
+        console.log( req.body.email );
+      }
+    } else {
+      console.log( 'missing email or token');
+    }
+    res.json( {
+      message: 'Success'
+    } );
+  }
+  
+export const dgl_be: HttpFunction = async (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+
+  if ( req.method === 'OPTIONS') {
+    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    res.status(204).send('');
+
+  } else if ( req.method === 'GET' && req.path.startsWith( '/requests/' ) ) {
+    const token = req.path.replace ('/requests/', '' );
+    const email = await getEmailFromToken( token, collection );
+    if ( email ) {
+      const accountSnapshot = await getAccountFromEmail( email );
+      res.json( {
+        message: accountSnapshot.empty ? 'create' : 'update',
+        email
+      } );
+      console.log( 'Fetched valid MySQL request for: ' + email );
+      console.log( 'with token: ' + token );
+    } else {
+      res.json( {
+        message: "Invalid or expired MySQL link"
+      } );
+      console.log( 'Invalid or expired MySQL token: ' + token );
+    }
+
+  } else if ( req.method === 'POST' && req.path === '/accounts') {
+    let message = 'MySQL: Unknown error.'
+    if ( req.body.token && req.body.password ) {
+      const email = await getEmailFromToken( req.body.token, collection );
+      if ( email ) {
+        const accountSnapshot = await getAccountFromEmail( email );
+        if ( !accountSnapshot.empty ) {
+          let lastAccount = '';
+          accountSnapshot.forEach(doc => {
+            const result = doc.data();
+            lastAccount = result.account;
+          });
+          await createOrUpadateMySQLAccount( lastAccount, req.body.password );
+          message = `Updated MySQL account: ${lastAccount} (for ${email})`;
+        } else {
+          let lastAccount = ''
+          const accountSnapshot = await accounts
+            .orderBy( 'account', 'desc' )
+            .limit( 1 )
+            .get();
+          let account = 'user0001';
+          if ( !accountSnapshot.empty ) {
+            let lastAccount = '';
+            accountSnapshot.forEach(doc => {
+              const result = doc.data();
+              lastAccount = result.account;
+            });
+            let lastNum = lastAccount.substring( 4 )
+            let newNum = parseInt( lastNum, 10 ) + 1;
+            account = 'user' + newNum.toString().padStart(4, '0');
+          }
+          const docRef = accounts.add( {
+            email,
+            account
+          } );
+          await createOrUpadateMySQLAccount( account, req.body.password );
+          message = `Created MySQL account: ${account} (for ${email})`;
+        }
+      } else {
+        message = 'Invalid or expired link.'
+      }
+    } else {
+      message = 'Missing token or password.';
+    }
+    console.log( message )
+    res.json( { message } );
+
+  } else if ( req.method === 'POST' && req.path === '/requests') {
+    CreateAccountRequest( req, res, collection, 'MySQL' );
+
+  } else if ( req.method === 'POST' && req.path === '/requests-matrix') {
+    CreateAccountRequest( req, res, collectionMatrix, 'Matrix' );
+
+  } else {
+    console.log( 'unsupported request');
+    console.log( 'method: ' + req.method );
+    console.log( 'path: ' + req.path );
+    res.status(500).json({
+      message: 'unsupported request'
+    });
+  }
 }
